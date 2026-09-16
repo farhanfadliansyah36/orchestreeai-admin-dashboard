@@ -60,21 +60,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [remainingIdleSeconds, setRemainingIdleSeconds] = useState<number>(15 * 60);
-  const [failedAttempts, setFailedAttempts] = useState<number>(() => {
-    if (typeof sessionStorage !== 'undefined') {
-      const stored = sessionStorage.getItem('orchestree_failed_logins');
-      return stored ? parseInt(stored, 10) : 0;
-    }
-    return 0;
-  });
-  const [lockoutUntil, setLockoutUntil] = useState<number | null>(() => {
-    if (typeof sessionStorage !== 'undefined') {
-      const stored = sessionStorage.getItem('orchestree_lockout_until');
-      return stored ? parseInt(stored, 10) : null;
-    }
-    return null;
-  });
+  // STRICT: Counter failedAttempts MURNI berasal dari response API backend (AdminLockoutResponse)
+  // Tidak pernah diinisialisasi atau diduplikasi dari sessionStorage/localStorage
+  const [failedAttempts, setFailedAttempts] = useState<number>(0);
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [lockoutSecondsRemaining, setLockoutSecondsRemaining] = useState<number>(0);
+
+  // Bersihkan sisa sesi dan kunci lockout lama dari browser saat aplikasi dimuat
+  useEffect(() => {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('orchestree_failed_logins');
+      sessionStorage.removeItem('orchestree_lockout_until');
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('orchestree_failed_logins');
+      localStorage.removeItem('orchestree_lockout_until');
+    }
+  }, []);
 
   const lastActivityRef = useRef<number>(Date.now());
 
@@ -91,10 +93,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setLockoutUntil(null);
         setLockoutSecondsRemaining(0);
         setFailedAttempts(0);
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.removeItem('orchestree_lockout_until');
-          sessionStorage.removeItem('orchestree_failed_logins');
-        }
       } else {
         setLockoutSecondsRemaining(Math.ceil((lockoutUntil - now) / 1000));
       }
@@ -128,12 +126,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem('orchestree_superadmin_token');
       sessionStorage.removeItem('orchestree_superadmin_user');
+      sessionStorage.removeItem('orchestree_failed_logins');
+      sessionStorage.removeItem('orchestree_lockout_until');
     }
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem('orchestree_superadmin_token');
       localStorage.removeItem('orchestree_superadmin_user');
       localStorage.removeItem('orchestree_superadmin_last_activity');
+      localStorage.removeItem('orchestree_failed_logins');
+      localStorage.removeItem('orchestree_lockout_until');
     }
+
+    setFailedAttempts(0);
+    setLockoutUntil(null);
+    setLockoutSecondsRemaining(0);
 
     if (reason) {
       setError(reason);
@@ -348,25 +354,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       // 2. Also check backend admin login endpoint if configured
       let backendChallenge: string | null = null;
+      let backendError: any = null;
       try {
         const res = await api.adminLogin(email.trim(), pass);
         if (res?.challengeToken) {
           backendChallenge = res.challengeToken;
         }
       } catch (beErr: any) {
-        // If backend explicitly enforces 3-strike lockout (429), honor it
-        if (beErr.message && (beErr.message.includes('terkunci') || beErr.message.includes('dikunci') || beErr.message.includes('429'))) {
-          const lockTime = Date.now() + LOCKOUT_DURATION_MS;
-          setLockoutUntil(lockTime);
-          if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem('orchestree_lockout_until', lockTime.toString());
-          }
+        backendError = beErr;
+        // If backend explicitly enforces lockout (429 or isLocked), honor it immediately
+        if (
+          beErr.isLocked ||
+          beErr.status === 429 ||
+          (beErr.message && (beErr.message.includes('terkunci') || beErr.message.includes('dikunci') || beErr.message.includes('429')))
+        ) {
           throw beErr;
         }
       }
 
       // STRICT AUTHENTICATION: If Supabase fails AND backend fails → REJECT & TRACK ATTEMPTS!
       if (supaError && !backendChallenge) {
+        if (backendError) {
+          throw backendError;
+        }
         const errorMsg = supaError.message || '';
         const isApiKeyIssue =
           !isSupabaseConfigured ||
@@ -380,11 +390,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         throw new Error(errorMsg || 'Kredensial login tidak valid. Silakan periksa email dan kata sandi Anda.');
       }
 
-      // Reset attempts on successful password check
+      // Reset attempts and lockout on successful password check
       setFailedAttempts(0);
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.removeItem('orchestree_failed_logins');
-      }
+      setLockoutUntil(null);
+      setLockoutSecondsRemaining(0);
 
       // Check MFA TOTP enrollment via Supabase Auth SDK (mfa.listFactors / challenge)
       if (supaAuth?.user) {
@@ -494,34 +503,36 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         throw new Error(errorText);
       }
 
-      const newAttempts = failedAttempts + 1;
-      setFailedAttempts(newAttempts);
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem('orchestree_failed_logins', newAttempts.toString());
+      // STRICT: Counter failedAttempts SELALU dan HANYA berasal dari response API backend terbaru (AdminLockoutResponse)
+      // Tidak pernah disimpan atau dihitung ulang secara lokal (duplikasi state dihapus)
+      if (typeof err.failedAttempts === 'number') {
+        setFailedAttempts(err.failedAttempts);
       }
 
-      if (newAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
-        const lockTime = Date.now() + LOCKOUT_DURATION_MS;
-        setLockoutUntil(lockTime);
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.setItem('orchestree_lockout_until', lockTime.toString());
-        }
+      if (err.isLocked || err.status === 429) {
+        const remaining = typeof err.remainingSeconds === 'number' && err.remainingSeconds > 0
+          ? err.remainingSeconds
+          : Math.ceil(LOCKOUT_DURATION_MS / 1000);
+        setLockoutSecondsRemaining(remaining);
+        setLockoutUntil(Date.now() + remaining * 1000);
 
         api.recordAuditLog({
           action: 'LOGIN_LOCKOUT_TRIGGERED',
           resource: 'auth/login',
           operatorId: email.trim(),
           status: 'BLOCKED',
-          details: '3 kali gagal kata sandi berturut-turut. Super Admin Lockout 15 menit diterapkan otomatis.',
+          details: 'Akun Super Admin terkunci dari response backend API.',
         });
 
-        const lockoutMsg = 'Akun Super Admin terkunci selama 15 menit karena telah gagal login 3 kali berturut-turut.';
+        const lockoutMsg = err.message || 'Akun Super Admin terkunci selama 15 menit karena telah gagal login 3 kali berturut-turut.';
         setError(lockoutMsg);
         throw new Error(lockoutMsg);
       }
 
-      const remainingAttempts = MAX_FAILED_LOGIN_ATTEMPTS - newAttempts;
-      const errorMsg = `${errorText || 'Login gagal. Periksa kredensial Anda.'} (Sisa kesempatan: ${remainingAttempts})`;
+      const attempts = typeof err.failedAttempts === 'number' ? err.failedAttempts : 0;
+      const remainingAttempts = Math.max(0, MAX_FAILED_LOGIN_ATTEMPTS - attempts);
+      const remainingNotice = attempts > 0 ? ` (Sisa kesempatan: ${remainingAttempts})` : '';
+      const errorMsg = `${errorText || 'Login gagal. Periksa kredensial Anda.'}${remainingNotice}`;
       setError(errorMsg);
       throw new Error(errorMsg);
     } finally {
@@ -600,7 +611,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             };
           }
         } catch (beErr: any) {
-          throw new Error(beErr.message || 'Kode verifikasi MFA TOTP tidak valid.');
+          throw beErr;
         }
       }
 
@@ -616,10 +627,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // SUCCESS: Reset all lockout and attempt counters
       setFailedAttempts(0);
       setLockoutUntil(null);
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.removeItem('orchestree_failed_logins');
-        sessionStorage.removeItem('orchestree_lockout_until');
-      }
+      setLockoutSecondsRemaining(0);
 
       const now = Date.now();
       lastActivityRef.current = now;
@@ -655,34 +663,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         details: 'Autentikasi Super Admin TOTP MFA berhasil. Sesi aktif 15 menit dibuat.',
       });
     } catch (err: any) {
-      const newAttempts = failedAttempts + 1;
-      setFailedAttempts(newAttempts);
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem('orchestree_failed_logins', newAttempts.toString());
+      // Counter failedAttempts SELALU dan HANYA berasal dari response API backend terbaru
+      if (typeof err.failedAttempts === 'number') {
+        setFailedAttempts(err.failedAttempts);
       }
 
-      if (newAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
-        const lockTime = Date.now() + LOCKOUT_DURATION_MS;
-        setLockoutUntil(lockTime);
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.setItem('orchestree_lockout_until', lockTime.toString());
-        }
+      if (err.isLocked || err.status === 429) {
+        const remaining = typeof err.remainingSeconds === 'number' && err.remainingSeconds > 0
+          ? err.remainingSeconds
+          : Math.ceil(LOCKOUT_DURATION_MS / 1000);
+        setLockoutSecondsRemaining(remaining);
+        setLockoutUntil(Date.now() + remaining * 1000);
 
         api.recordAuditLog({
           action: 'MFA_LOCKOUT_TRIGGERED',
           resource: 'auth/mfa',
           operatorId: tempCredentials?.email || 'unknown',
           status: 'BLOCKED',
-          details: '3 kali gagal verifikasi TOTP MFA berturut-turut. Super Admin Lockout 15 menit diterapkan.',
+          details: 'Verifikasi TOTP MFA terkunci dari response backend API.',
         });
 
-        const lockoutMsg = 'Akun Super Admin terkunci selama 15 menit karena telah gagal verifikasi MFA 3 kali.';
+        const lockoutMsg = err.message || 'Akun Super Admin terkunci selama 15 menit karena telah gagal verifikasi MFA 3 kali.';
         setError(lockoutMsg);
         throw new Error(lockoutMsg);
       }
 
-      const remainingAttempts = MAX_FAILED_LOGIN_ATTEMPTS - newAttempts;
-      const errorMsg = `${err.message || 'Verifikasi MFA gagal.'} (Sisa kesempatan: ${remainingAttempts})`;
+      const attempts = typeof err.failedAttempts === 'number' ? err.failedAttempts : 0;
+      const remainingAttempts = Math.max(0, MAX_FAILED_LOGIN_ATTEMPTS - attempts);
+      const remainingNotice = attempts > 0 ? ` (Sisa kesempatan: ${remainingAttempts})` : '';
+      const errorMsg = `${err.message || 'Verifikasi MFA gagal.'}${remainingNotice}`;
       setError(errorMsg);
       throw new Error(errorMsg);
     } finally {

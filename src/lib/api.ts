@@ -54,6 +54,7 @@ import {
   SupportImpersonationSession,
   IpAllowlistConfig,
   AdminAuthResponse,
+  AdminLockoutResponse,
   ChannelAccountMonitoringSummary,
   RevenueIntelligenceSummary,
   LeadPipelineMonitoringSummary,
@@ -81,6 +82,27 @@ export class BackendApiError extends Error {
     this.status = status;
     this.endpoint = endpoint;
     this.rawDetails = rawDetails;
+  }
+}
+
+export class AdminAuthApiError extends Error {
+  isLocked?: boolean;
+  remainingSeconds?: number;
+  failedAttempts?: number;
+  status?: number;
+
+  constructor(
+    message: string,
+    data?: { isLocked?: boolean; remainingSeconds?: number; failedAttempts?: number; status?: number }
+  ) {
+    super(message);
+    this.name = 'AdminAuthApiError';
+    if (data) {
+      this.isLocked = data.isLocked;
+      this.remainingSeconds = data.remainingSeconds;
+      this.failedAttempts = data.failedAttempts;
+      this.status = data.status;
+    }
   }
 }
 
@@ -4255,13 +4277,29 @@ export class ApiClient {
     });
 
     if (res.status === 429) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Akun terkunci selama 15 menit karena gagal login 3 kali.');
+      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      throw new AdminAuthApiError(
+        data.error || 'Akun terkunci selama 15 menit karena gagal login 3 kali.',
+        {
+          status: 429,
+          isLocked: data.isLocked ?? true,
+          remainingSeconds: data.remainingSeconds,
+          failedAttempts: data.failedAttempts ?? 3,
+        }
+      );
     }
 
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `Login gagal: [${res.status}]`);
+      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      throw new AdminAuthApiError(
+        data.error || `Login gagal: [${res.status}]`,
+        {
+          status: res.status,
+          isLocked: data.isLocked,
+          remainingSeconds: data.remainingSeconds,
+          failedAttempts: data.failedAttempts,
+        }
+      );
     }
 
     const authData: AdminAuthResponse = await res.json();
@@ -4297,8 +4335,16 @@ export class ApiClient {
     });
 
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Verifikasi MFA gagal.');
+      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      throw new AdminAuthApiError(
+        data.error || 'Verifikasi MFA gagal.',
+        {
+          status: res.status,
+          isLocked: data.isLocked,
+          remainingSeconds: data.remainingSeconds,
+          failedAttempts: data.failedAttempts,
+        }
+      );
     }
 
     const data: AdminAuthResponse = await res.json();

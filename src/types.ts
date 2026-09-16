@@ -25,6 +25,13 @@ export interface AdminAuthResponse {
   csrfToken?: string;
 }
 
+export interface AdminLockoutResponse {
+  error?: string;
+  isLocked?: boolean;
+  remainingSeconds?: number;
+  failedAttempts?: number;
+}
+
 export interface TenantItem {
   id: string;
   name: string;
