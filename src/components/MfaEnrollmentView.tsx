@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   ShieldCheck,
@@ -42,11 +42,20 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showManualKey, setShowManualKey] = useState<boolean>(false);
 
-  const fetchEnrollment = async () => {
+  // Simpan props terbaru di ref untuk menghindari re-trigger yang tidak diinginkan
+  const emailRef = useRef(email);
+  const preAuthTokenRef = useRef(preAuthToken);
+  emailRef.current = email;
+  preAuthTokenRef.current = preAuthToken;
+
+  // Guard agar pendaftaran hanya dieksekusi 1 kali saat modal dibuka (bahkan di StrictMode/re-render)
+  const hasInitiatedRef = useRef(false);
+
+  const fetchEnrollment = useCallback(async (isManualRefresh: boolean = false) => {
     setIsLoadingEnroll(true);
     setErrorMessage(null);
     try {
-      const data = await api.adminMfaEnroll(email, preAuthToken);
+      const data = await api.adminMfaEnroll(emailRef.current, preAuthTokenRef.current);
       setEnrollData(data);
     } catch (err: any) {
       setErrorMessage(
@@ -55,11 +64,15 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
     } finally {
       setIsLoadingEnroll(false);
     }
-  };
+  }, []);
 
+  // FASE AUDIT MFA: Eksekusi HANYA SEKALI saat modal dibuka (dependency array kosong [])
+  // Tidak ada auto-refresh berkala (setInterval) karena secret TOTP tidak boleh berubah tanpa aksi eksplisit user.
   useEffect(() => {
-    fetchEnrollment();
-  }, [email, preAuthToken]);
+    if (hasInitiatedRef.current) return;
+    hasInitiatedRef.current = true;
+    fetchEnrollment(false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCopySecret = () => {
     if (enrollData?.secret) {
@@ -178,11 +191,12 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
               </span>
               <button
                 type="button"
-                onClick={fetchEnrollment}
-                className="text-[11px] text-slate-400 hover:text-emerald-400 flex items-center space-x-1 transition"
-                title="Generate ulang QR Code"
+                onClick={() => fetchEnrollment(true)}
+                disabled={isLoadingEnroll}
+                className="text-[11px] text-slate-400 hover:text-emerald-400 disabled:opacity-50 flex items-center space-x-1 transition cursor-pointer"
+                title="Generate ulang QR Code secara manual"
               >
-                <RefreshCw className="w-3 h-3" />
+                <RefreshCw className={`w-3 h-3 ${isLoadingEnroll ? 'animate-spin' : ''}`} />
                 <span>Refresh Key</span>
               </button>
             </div>

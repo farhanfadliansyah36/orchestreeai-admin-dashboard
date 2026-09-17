@@ -56,4 +56,26 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
     expect(firstEnroll.otpauthUri).toBeDefined();
     expect(secondEnroll.otpauthUri).toBeDefined();
   });
+
+  it('5. AUDIT: Verifikasi tidak ada background interval / auto-refresh berkala ke /admin/auth/mfa/enroll selama 30 detik idle', async () => {
+    vi.useFakeTimers();
+    const enrollSpy = vi.spyOn(api, 'adminMfaEnroll');
+
+    // Simulasi initial fetch saat modal dibuka (T = 0s)
+    await api.adminMfaEnroll({ email: superAdminEmail });
+    expect(enrollSpy).toHaveBeenCalledTimes(1);
+
+    // Simulasi modal terbuka tanpa interaksi selama 30 detik (T = 1s s/d 30s)
+    // Majukan waktu virtual 30.000 ms
+    vi.advanceTimersByTime(30000);
+
+    // Verifikasi bahwa TIDAK ADA pemanggilan kedua atau interval berulang yang berjalan otomatis
+    expect(enrollSpy).toHaveBeenCalledTimes(1);
+
+    // Simulasi user secara EKSPLISIT menekan tombol "Refresh Key"
+    await api.adminMfaEnroll({ email: superAdminEmail });
+    expect(enrollSpy).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
 });
