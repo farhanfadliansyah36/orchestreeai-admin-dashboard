@@ -19,6 +19,8 @@ export interface AdminAuthResponse {
   user?: AdminUserProfile;
   mfaRequired?: boolean;
   requiresMfa?: boolean;
+  mfaEnrolled?: boolean;
+  isFirstLogin?: boolean;
   challengeToken?: string;
   message?: string;
   expiresInSeconds?: number;
@@ -26,6 +28,26 @@ export interface AdminAuthResponse {
   status?: string;
   email?: string;
   sessionIdleTimeoutMinutes?: number;
+}
+
+export interface AdminMfaEnrollResponse {
+  status?: string;
+  secret?: string;
+  otpauthUri: string;
+  qrCodeUrl?: string;
+  enrollmentToken?: string;
+  recoveryCodes?: string[];
+  message?: string;
+}
+
+export interface AdminMfaConfirmEnrollmentResponse {
+  status?: string;
+  success: boolean;
+  message?: string;
+  token?: string;
+  accessToken?: string;
+  role?: string;
+  user?: AdminUserProfile;
 }
 
 export interface AdminLockoutResponse {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   TrendingUp,
   DollarSign,
@@ -203,7 +203,8 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
     }
   }, []);
 
-  // Fetch all initial data with Honest Error reporting
+  // Fetch all initial data with Honest Error reporting (Single-fetch on mount with stable ref)
+  const isInitialMountedRef = useRef(false);
   const loadAllAnalytics = useCallback(async () => {
     setIsRefreshing(true);
     setHonestError(null);
@@ -246,10 +247,15 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
     fetchSelectionUsage,
     fetchWorkflowExecutions,
     fetchDailyTaskPerformance,
+    fetchWorkforceSummary,
   ]);
 
+  // Initial load on mount only once to guarantee no infinite loop / blank screen
   useEffect(() => {
-    loadAllAnalytics();
+    if (!isInitialMountedRef.current) {
+      isInitialMountedRef.current = true;
+      loadAllAnalytics();
+    }
   }, [loadAllAnalytics]);
 
   // Handle individual period changes (REAL RE-FETCH)
@@ -274,72 +280,97 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
   };
 
   // ---------------------------------------------------------------------------
-  // 1.2. Supabase Realtime Subscription (SSOT Realtime Pattern - Fase 101)
+  // 1.2. Supabase Realtime Subscription (Throttled & Resilient Pattern)
+  // Mencegah loop refresh berulang dengan debouncing / throttling 5 detik
   // ---------------------------------------------------------------------------
+  const realtimeDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRealtimeUpdateRef = useRef<(tableName: string) => void>(() => {});
+
   useEffect(() => {
-    const triggerRealtimeUpdate = (tableName: string) => {
+    triggerRealtimeUpdateRef.current = (tableName: string) => {
       setRealtimeEventsCount((prev) => prev + 1);
       setRealtimePulse(true);
       setLastRealtimeTable(tableName);
       setTimeout(() => setRealtimePulse(false), 2000);
 
-      // Immediately re-fetch real backend data on any live transaction event
-      fetchOverview();
-      fetchUsageCredit(creditPeriod);
-      fetchLlmUsage(llmPeriod);
-      fetchWorkflowExecutions();
+      // Debounce re-fetch agar tidak memicu badai network fetch jika event masuk bertubi-tubi
+      if (realtimeDebounceTimerRef.current) {
+        clearTimeout(realtimeDebounceTimerRef.current);
+      }
+      realtimeDebounceTimerRef.current = setTimeout(() => {
+        fetchOverview();
+        fetchUsageCredit(creditPeriod);
+        fetchLlmUsage(llmPeriod);
+        fetchWorkflowExecutions();
+      }, 3000);
     };
+  });
 
-    const ordersChannel = supabase
-      .channel('realtime:superadmin-orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-        console.log('[Supabase Realtime] Order event received:', payload);
-        triggerRealtimeUpdate('orders');
-      })
-      .subscribe();
+  useEffect(() => {
+    let ordersChannel: any;
+    let paymentsChannel: any;
+    let llmLogsChannel: any;
+    let selectionRequestsChannel: any;
+    let workflowChannel: any;
 
-    const paymentsChannel = supabase
-      .channel('realtime:superadmin-payments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, (payload) => {
-        console.log('[Supabase Realtime] Payment event received:', payload);
-        triggerRealtimeUpdate('payments');
-      })
-      .subscribe();
+    try {
+      ordersChannel = supabase
+        .channel('realtime:superadmin-orders')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+          console.log('[Supabase Realtime] Order event received:', payload);
+          triggerRealtimeUpdateRef.current('orders');
+        })
+        .subscribe();
 
-    const llmLogsChannel = supabase
-      .channel('realtime:superadmin-llm-logs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'llm_usage_logs' }, (payload) => {
-        console.log('[Supabase Realtime] LLM Usage Log event received:', payload);
-        triggerRealtimeUpdate('llm_usage_logs');
-      })
-      .subscribe();
+      paymentsChannel = supabase
+        .channel('realtime:superadmin-payments')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, (payload) => {
+          console.log('[Supabase Realtime] Payment event received:', payload);
+          triggerRealtimeUpdateRef.current('payments');
+        })
+        .subscribe();
 
-    const selectionRequestsChannel = supabase
-      .channel('realtime:superadmin-selection-requests')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'selection_requests' }, (payload) => {
-        console.log('[Supabase Realtime] Selection Request event received:', payload);
-        triggerRealtimeUpdate('selection_requests');
-        fetchSelectionUsage();
-      })
-      .subscribe();
+      llmLogsChannel = supabase
+        .channel('realtime:superadmin-llm-logs')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'llm_usage_logs' }, (payload) => {
+          console.log('[Supabase Realtime] LLM Usage Log event received:', payload);
+          triggerRealtimeUpdateRef.current('llm_usage_logs');
+        })
+        .subscribe();
 
-    // Verifikasi Bug Foreign Key: Subscribing to workflow_executions
-    const workflowChannel = supabase
-      .channel('realtime:superadmin-workflow-executions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'workflow_executions' }, (payload) => {
-        console.log('[Supabase Realtime] workflow_executions event received:', payload);
-        triggerRealtimeUpdate('workflow_executions');
-      })
-      .subscribe();
+      selectionRequestsChannel = supabase
+        .channel('realtime:superadmin-selection-requests')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'selection_requests' }, (payload) => {
+          console.log('[Supabase Realtime] Selection Request event received:', payload);
+          triggerRealtimeUpdateRef.current('selection_requests');
+        })
+        .subscribe();
+
+      // Verifikasi Bug Foreign Key: Subscribing to workflow_executions
+      workflowChannel = supabase
+        .channel('realtime:superadmin-workflow-executions')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'workflow_executions' }, (payload) => {
+          console.log('[Supabase Realtime] workflow_executions event received:', payload);
+          triggerRealtimeUpdateRef.current('workflow_executions');
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn('[AdminAnalytics] Realtime connection fallback:', err);
+    }
 
     return () => {
-      supabase.removeChannel(ordersChannel);
-      supabase.removeChannel(paymentsChannel);
-      supabase.removeChannel(llmLogsChannel);
-      supabase.removeChannel(selectionRequestsChannel);
-      supabase.removeChannel(workflowChannel);
+      if (realtimeDebounceTimerRef.current) {
+        clearTimeout(realtimeDebounceTimerRef.current);
+      }
+      try {
+        if (ordersChannel) supabase.removeChannel(ordersChannel);
+        if (paymentsChannel) supabase.removeChannel(paymentsChannel);
+        if (llmLogsChannel) supabase.removeChannel(llmLogsChannel);
+        if (selectionRequestsChannel) supabase.removeChannel(selectionRequestsChannel);
+        if (workflowChannel) supabase.removeChannel(workflowChannel);
+      } catch {}
     };
-  }, [fetchOverview, fetchUsageCredit, creditPeriod, fetchLlmUsage, llmPeriod, fetchWorkflowExecutions]);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Transaction Verification (DoD Helper)
