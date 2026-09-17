@@ -13,8 +13,9 @@ import {
   FileCode,
   ShieldAlert,
   Info,
+  Database,
 } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, PricingSyncMetadata } from '../lib/api';
 import {
   CommercialPlanItem,
   CommercialPlanUpsertRequest,
@@ -28,6 +29,8 @@ export const CommercialPlanManagementScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showDiagnosticModal, setShowDiagnosticModal] = useState<boolean>(false);
+  const [syncMetadata, setSyncMetadata] = useState<PricingSyncMetadata | null>(null);
 
   // Plan Modal Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -237,6 +240,17 @@ export const CommercialPlanManagementScreen: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center space-x-2">
+          <button
+            onClick={() => {
+              setSyncMetadata(api.getPricingSyncMetadata());
+              setShowDiagnosticModal(true);
+            }}
+            className="flex items-center space-x-1.5 text-[11px] font-medium bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-800/60 px-2.5 py-1 rounded transition-colors cursor-pointer"
+            title="Lihat status integrasi database internal (Super Admin)"
+          >
+            <Info className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Info Integrasi DB</span>
+          </button>
           <span className="text-[11px] font-mono bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 px-2.5 py-1 rounded">
             PostgreSQL Live Sync
           </span>
@@ -732,6 +746,70 @@ export const CommercialPlanManagementScreen: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Internal Super Admin Diagnostic Modal */}
+      {showDiagnosticModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 text-slate-100 shadow-2xl relative">
+            <button
+              onClick={() => setShowDiagnosticModal(false)}
+              className="absolute top-5 right-5 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-400">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Status Integrasi Server Database (Admin Internal)</h3>
+                <p className="text-xs text-slate-400">Status sinkronisasi data commercial plans dan channel internal</p>
+              </div>
+            </div>
+
+            {/* Connection Diagnostics */}
+            <div className="space-y-2.5 text-xs font-mono bg-black/40 p-4 rounded-xl border border-slate-800 mb-5">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Backend API URL:</span>
+                <span className="text-cyan-400 font-semibold">{syncMetadata?.backendUrl || 'https://api.orchestree.biz.id/api/v1'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Database Project URL:</span>
+                <span className="text-blue-400 font-semibold">{syncMetadata?.supabaseUrl || 'https://db.orchestree.biz.id'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Database Table:</span>
+                <span className="text-emerald-400 font-semibold">public.commercial_plans</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Realtime Channel:</span>
+                <span className="text-emerald-300 font-semibold flex items-center space-x-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
+                  <span>SUBSCRIBED (Active)</span>
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Data Source Aktif:</span>
+                <span className="text-yellow-300 font-semibold uppercase">{syncMetadata?.source || 'backend_api / database'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Update Terakhir:</span>
+                <span className="text-white">{syncMetadata?.lastSyncedAt ? new Date(syncMetadata.lastSyncedAt).toLocaleString('id-ID') : 'Baru saja'}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowDiagnosticModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

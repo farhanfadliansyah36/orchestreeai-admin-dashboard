@@ -6,8 +6,18 @@ export class ApiError extends Error {
   endpoint?: string;
   rawDetails?: any;
 
-  constructor(status: number, message: string, endpoint?: string, rawDetails?: any) {
-    super(message || `API Request failed with status ${status}`);
+  constructor(status: number, message: any, endpoint?: string, rawDetails?: any) {
+    let cleanMessage = `API Request failed with status ${status}`;
+    if (typeof message === 'string' && message.trim() && message.trim() !== '{}' && message.trim() !== '[]' && message.trim() !== '[object Object]') {
+      cleanMessage = message.trim();
+    } else if (typeof message === 'object' && message !== null) {
+      if (typeof message.error === 'string' && message.error.trim() && message.error.trim() !== '{}') {
+        cleanMessage = message.error.trim();
+      } else if (typeof message.message === 'string' && message.message.trim() && message.message.trim() !== '{}') {
+        cleanMessage = message.message.trim();
+      }
+    }
+    super(cleanMessage);
     this.name = 'ApiError';
     this.status = status;
     this.endpoint = endpoint;
@@ -152,13 +162,19 @@ export const apiClient = {
       try {
         const parsed = JSON.parse(rawText);
         rawDetails = parsed;
-        if (parsed.error) parsedMessage = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
-        else if (parsed.message) parsedMessage = parsed.message;
-        else if (parsed.status === 'error') parsedMessage = JSON.stringify(parsed);
+        if (parsed.error && typeof parsed.error === 'string' && parsed.error.trim() && parsed.error.trim() !== '{}') {
+          parsedMessage = parsed.error.trim();
+        } else if (parsed.message && typeof parsed.message === 'string' && parsed.message.trim() && parsed.message.trim() !== '{}') {
+          parsedMessage = parsed.message.trim();
+        } else if (parsed.error && typeof parsed.error === 'object' && parsed.error?.message) {
+          parsedMessage = String(parsed.error.message);
+        } else if (parsed.status && typeof parsed.status === 'string' && parsed.status !== 'error') {
+          parsedMessage = `Status: ${parsed.status}`;
+        }
       } catch {}
 
-      const finalMessage = parsedMessage && parsedMessage.trim().length > 0
-        ? parsedMessage
+      const finalMessage = parsedMessage && parsedMessage.trim().length > 0 && parsedMessage.trim() !== '{}' && parsedMessage.trim() !== '[]' && parsedMessage.trim() !== '[object Object]'
+        ? parsedMessage.trim()
         : `Backend returned HTTP ${res.status} for ${cleanPath}`;
 
       throw new ApiError(res.status, finalMessage, cleanPath, rawDetails);

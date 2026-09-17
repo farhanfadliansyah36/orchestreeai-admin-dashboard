@@ -346,19 +346,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       await api.initCsrf().catch(() => {});
 
-      // 1. Genuine Supabase Auth via signInWithPassword (SDK resmi)
-      const { data: supaAuth, error: supaError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: pass,
-      });
-
-      // 2. Also check backend admin login endpoint if configured
+      // 1. Backend admin login endpoint (Primary SSOT for Super Admin authentication)
       let backendChallenge: string | null = null;
       let backendError: any = null;
+      let backendRes: any = null;
+
       try {
-        const res = await api.adminLogin(email.trim(), pass);
-        if (res?.challengeToken) {
-          backendChallenge = res.challengeToken;
+        backendRes = await api.adminLogin(email.trim(), pass);
+        if (backendRes) {
+          if (backendRes.challengeToken) {
+            backendChallenge = backendRes.challengeToken;
+          } else if (
+            backendRes.status === 'MFA_REQUIRED' ||
+            backendRes.status === 'PENDING_MFA' ||
+            backendRes.requiresMfa ||
+            backendRes.mfaRequired ||
+            (backendRes.email && backendRes.message && backendRes.message.toLowerCase().includes('totp')) ||
+            (backendRes.email && backendRes.status)
+          ) {
+            backendChallenge = `backend-mfa-${Date.now()}`;
+          }
         }
       } catch (beErr: any) {
         backendError = beErr;
@@ -372,28 +379,66 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       }
 
-      // STRICT AUTHENTICATION: If Supabase fails AND backend fails → REJECT & TRACK ATTEMPTS!
-      if (supaError && !backendChallenge) {
+      // 2. Also check Supabase Auth if backend challenge not yet obtained and no direct token
+      let supaAuth: any = null;
+      let supaError: any = null;
+      if (!backendChallenge && !(backendRes && (backendRes.token || backendRes.accessToken))) {
+        try {
+          const res = await supabase.auth.signInWithPassword({
+            email: email.trim(),
+            password: pass,
+          });
+          supaAuth = res.data;
+          supaError = res.error;
+        } catch (sErr: any) {
+          supaError = sErr;
+        }
+      }
+
+      // STRICT AUTHENTICATION: If backend failed AND Supabase failed → REJECT & TRACK ATTEMPTS!
+      if (!backendChallenge && !(backendRes && (backendRes.token || backendRes.accessToken)) && !supaAuth?.user && !supaAuth?.session) {
         if (backendError) {
           throw backendError;
         }
-        const errorMsg = supaError.message || '';
-        const isApiKeyIssue =
-          !isSupabaseConfigured ||
-          errorMsg.toLowerCase().includes('api key') ||
-          errorMsg.toLowerCase().includes('apikey');
+        if (supaError) {
+          const errorMsg = typeof supaError.message === 'string' ? supaError.message.trim() : '';
+          const isApiKeyIssue =
+            !isSupabaseConfigured ||
+            errorMsg.toLowerCase().includes('api key') ||
+            errorMsg.toLowerCase().includes('apikey');
 
-        if (isApiKeyIssue) {
-          throw new Error('Koneksi Layanan Otentikasi Belum Terhubung: Kunci konfigurasi tidak valid atau belum diinjeksikan saat build time.');
+          if (isApiKeyIssue) {
+            throw new Error('Koneksi Layanan Otentikasi Belum Terhubung: Kunci konfigurasi tidak valid atau belum diinjeksikan saat build time.');
+          }
+
+          throw new Error(errorMsg && errorMsg !== '{}' ? errorMsg : 'Kredensial login tidak valid. Silakan periksa email dan kata sandi Anda.');
         }
 
-        throw new Error(errorMsg || 'Kredensial login tidak valid. Silakan periksa email dan kata sandi Anda.');
+        throw new Error('Kredensial login tidak valid. Silakan periksa email dan kata sandi Anda.');
       }
 
       // Reset attempts and lockout on successful password check
       setFailedAttempts(0);
       setLockoutUntil(null);
       setLockoutSecondsRemaining(0);
+      setError(null);
+
+      // If backend issued MFA requirement (either status: MFA_REQUIRED or challengeToken)
+      if (backendChallenge || (backendRes && (backendRes.status === 'MFA_REQUIRED' || backendRes.requiresMfa))) {
+        setTempCredentials({
+          email: backendRes?.email || email.trim(),
+          challengeToken: backendChallenge || backendRes?.challengeToken || `backend-mfa-${Date.now()}`,
+        });
+        setMfaPending(true);
+        api.recordAuditLog({
+          action: 'LOGIN_PASSWORD_ACCEPTED',
+          resource: 'auth/login',
+          operatorId: email.trim(),
+          status: 'SUCCESS',
+          details: 'Kata sandi diverifikasi. Melanjutkan ke verifikasi MFA TOTP.',
+        });
+        return;
+      }
 
       // Check MFA TOTP enrollment via Supabase Auth SDK (mfa.listFactors / challenge)
       if (supaAuth?.user) {
@@ -424,23 +469,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         } catch {
           // Continue to backend challenge if Supabase factors check deferred
         }
-      }
-
-      // If backend issued a challenge token for TOTP
-      if (backendChallenge) {
-        setTempCredentials({
-          email: email.trim(),
-          challengeToken: backendChallenge,
-        });
-        setMfaPending(true);
-        api.recordAuditLog({
-          action: 'LOGIN_PASSWORD_ACCEPTED',
-          resource: 'auth/login',
-          operatorId: email.trim(),
-          status: 'SUCCESS',
-          details: 'Kata sandi diverifikasi. Tantangan MFA TOTP diterbitkan via Backend Server.',
-        });
-        return;
       }
 
       // FASE 86 / BAGIAN A.1.1: ZERO-BYPASS MANDATORY MFA
@@ -487,7 +515,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         details: 'Kata sandi valid. Menunggu verifikasi 6-digit TOTP (Zero-Bypass Policy).',
       });
     } catch (err: any) {
-      const errorText = err.message || '';
+      let errorText = 'Login gagal. Periksa kredensial Anda.';
+      if (typeof err === 'string' && err.trim() && err.trim() !== '{}' && err.trim() !== '[]' && err.trim() !== '[object Object]') {
+        errorText = err.trim();
+      } else if (err?.message && typeof err.message === 'string' && err.message.trim() && err.message.trim() !== '{}' && err.message.trim() !== '[]' && err.message.trim() !== '[object Object]') {
+        errorText = err.message.trim();
+      } else if (err?.error && typeof err.error === 'string' && err.error.trim() && err.error.trim() !== '{}') {
+        errorText = err.error.trim();
+      }
       const isInfrastructureOrConfigError =
         errorText.includes('Koneksi Layanan') ||
         errorText.includes('Koneksi Supabase') ||
@@ -599,7 +634,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const backendRes = await api.adminVerifyMfa(tempCredentials.email, cleanCode, tempCredentials.challengeToken);
           sessionToken = backendRes.accessToken || backendRes.token || '';
           if (backendRes.user) {
-            superAdminUser = backendRes.user;
+            superAdminUser = {
+              id: backendRes.user.id || 'usr-superadmin',
+              email: backendRes.user.email || tempCredentials.email,
+              role: (backendRes.user.role as any) || (backendRes.role as any) || 'SUPER_ADMIN',
+              tenantId: backendRes.user.tenantId || 'system-platform',
+              isMfaVerified: backendRes.isMfaVerified ?? true,
+              fullName: (backendRes.user as any).fullName || (backendRes.user as any).name || 'Platform Super Administrator',
+            };
           } else if (sessionToken) {
             superAdminUser = {
               id: 'admin-' + tempCredentials.email.replace(/[^a-zA-Z0-9]/g, '-'),

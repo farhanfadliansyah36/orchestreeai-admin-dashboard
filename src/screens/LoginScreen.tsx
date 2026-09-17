@@ -24,13 +24,32 @@ export const LoginScreen: React.FC = () => {
   const secondsLeft = lockoutSecondsRemaining % 60;
   const formattedLockout = `${minutesLeft}:${secondsLeft.toString().padStart(2, '0')}`;
 
+  const formatAuthError = (err: any, fallback: string): string => {
+    if (!err) return fallback;
+    if (typeof err === 'string') {
+      const trimmed = err.trim();
+      if (trimmed && trimmed !== '{}' && trimmed !== '[]' && trimmed !== '[object Object]') {
+        return trimmed;
+      }
+      return fallback;
+    }
+    const candidate = err.message || err.error || err.statusText;
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed && trimmed !== '{}' && trimmed !== '[]' && trimmed !== '[object Object]') {
+        return trimmed;
+      }
+    }
+    return fallback;
+  };
+
   const handleInitialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     try {
       await login(email, password);
     } catch (err: any) {
-      setFormError(err.message || 'Login gagal.');
+      setFormError(formatAuthError(err, 'Login gagal. Periksa kredensial Anda.'));
     }
   };
 
@@ -40,7 +59,7 @@ export const LoginScreen: React.FC = () => {
     try {
       await verifyMfa(totpCode);
     } catch (err: any) {
-      setFormError(err.message || 'Verifikasi MFA gagal.');
+      setFormError(formatAuthError(err, 'Verifikasi MFA gagal. Pastikan kode TOTP 6-digit sesuai.'));
     }
   };
 
@@ -104,7 +123,7 @@ export const LoginScreen: React.FC = () => {
         {!isLockedOut && (error || formError) && (
           <div className="mb-6 p-3.5 bg-rose-950/40 border border-rose-800/60 rounded-xl flex items-start space-x-2.5 text-rose-300 text-xs">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <p>{error || formError}</p>
+            <p>{formatAuthError(error || formError, 'Otentikasi gagal. Periksa email dan kata sandi Anda.')}</p>
           </div>
         )}
 

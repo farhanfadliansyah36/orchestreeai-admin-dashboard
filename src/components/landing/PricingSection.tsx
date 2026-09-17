@@ -4,23 +4,10 @@ import {
   Sparkles,
   ArrowRight,
   ShieldCheck,
-  Zap,
-  HelpCircle,
-  Loader2,
-  RefreshCw,
-  Database,
-  Server,
-  Wifi,
-  Activity,
-  Info,
-  X,
-  CheckCircle2,
-  AlertCircle,
 } from 'lucide-react';
-import { api, PricingSyncMetadata, DEFAULT_COMMERCIAL_PLANS } from '../../lib/api';
-import { supabase } from '../../lib/supabaseClient';
+import { api, DEFAULT_COMMERCIAL_PLANS } from '../../lib/api';
 import { CommercialPlanItem } from '../../types';
-import { CANONICAL_PLANS, CanonicalPlanConfig } from './landingData';
+import { CANONICAL_PLANS } from './landingData';
 
 interface PricingSectionProps {
   onSelectPlan?: (planId?: string) => void;
@@ -28,80 +15,48 @@ interface PricingSectionProps {
 
 export const PricingSection: React.FC<PricingSectionProps> = ({ onSelectPlan }) => {
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('annual');
-  const [plans, setPlans] = useState<CommercialPlanItem[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [syncMetadata, setSyncMetadata] = useState<PricingSyncMetadata | null>(null);
-  const [syncNotification, setSyncNotification] = useState<string | null>(null);
-  const [isRealtimeActive, setIsRealtimeActive] = useState<boolean>(true);
-  const [showDiagnosticModal, setShowDiagnosticModal] = useState<boolean>(false);
+  const [plans, setPlans] = useState<CommercialPlanItem[]>(() => api.getPlansFromLocalCache() || DEFAULT_COMMERCIAL_PLANS);
+  const [lastUpdatedDate, setLastUpdatedDate] = useState<string>('Hari ini');
 
-  const fetchPricing = async (showNotification = false) => {
+  const fetchPricing = async () => {
     try {
-      if (showNotification) setIsSyncing(true);
-      const data = await api.getPublicPlans(true);
+      const data = await api.getPublicPlans(false);
       if (Array.isArray(data) && data.length > 0) {
         setPlans(data);
+        // Extract latest update timestamp if present
+        const latestTime = data.reduce((latest, item) => {
+          if (!item.updatedAt) return latest;
+          const time = new Date(item.updatedAt).getTime();
+          return time > latest ? time : latest;
+        }, 0);
+        if (latestTime > 0) {
+          setLastUpdatedDate(new Date(latestTime).toLocaleDateString('id-ID', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          }));
+        }
       } else {
         setPlans(DEFAULT_COMMERCIAL_PLANS);
-      }
-      const meta = api.getPricingSyncMetadata();
-      setSyncMetadata(meta);
-      if (showNotification) {
-        const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setSyncNotification(`Harga dan paket terbaru berhasil disinkronkan dari Server Database (${timeStr} WIB).`);
-        setTimeout(() => setSyncNotification(null), 5000);
       }
     } catch (err: any) {
       console.warn('Could not fetch dynamic plans, using cached/fallback:', err);
       const cached = api.getPlansFromLocalCache();
       setPlans(cached);
-      setSyncMetadata(api.getPricingSyncMetadata());
-    } finally {
-      setIsLoading(false);
-      setIsSyncing(false);
     }
   };
 
   useEffect(() => {
-    // 1. Initial fetch
+    // 1. Initial fetch once on mount
     fetchPricing();
 
-    // 2. Realtime Supabase PostgreSQL Logical Replication Channel
-    const channel = supabase
-      .channel('public:commercial_plans_live_pricing')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'commercial_plans' },
-        (payload) => {
-          console.log('[Supabase Realtime] commercial_plans update:', payload);
-          fetchPricing(true);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'subscription_plans' },
-        (payload) => {
-          console.log('[Supabase Realtime] subscription_plans update:', payload);
-          fetchPricing(true);
-        }
-      )
-      .on('broadcast', { event: 'plan_updated' }, (msg) => {
-        console.log('[Supabase Broadcast] plan_updated event:', msg);
-        fetchPricing(true);
-      })
-      .subscribe((status) => {
-        setIsRealtimeActive(status === 'SUBSCRIBED');
-      });
-
-    // 3. Local cross-component update event listener (from admin updates / api updates)
-    const handlePriceSync = (e: any) => {
-      fetchPricing(true);
+    // 2. Local cross-component update event listener (triggered only when Admin updates plans)
+    const handlePriceSync = () => {
+      fetchPricing();
     };
     window.addEventListener('orchestree:pricing-updated', handlePriceSync);
 
     return () => {
-      supabase.removeChannel(channel);
       window.removeEventListener('orchestree:pricing-updated', handlePriceSync);
     };
   }, []);
@@ -153,10 +108,6 @@ export const PricingSection: React.FC<PricingSectionProps> = ({ onSelectPlan }) 
     });
   }, [plans]);
 
-  const handleManualSync = () => {
-    fetchPricing(true);
-  };
-
   const handleConsultation = (planName: string) => {
     if (onSelectPlan) {
       onSelectPlan('custom');
@@ -188,58 +139,14 @@ export const PricingSection: React.FC<PricingSectionProps> = ({ onSelectPlan }) 
           </h2>
           
           <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            Pilih paket yang sesuai dengan skala bisnis Anda. Seluruh paket terhubung secara real-time ke Layanan Database untuk memastikan tarif transparan, isolasi multi-tenant terenkripsi, dan akses Company Brain
+            Pilih paket yang sesuai dengan skala bisnis Anda. Tarif transparan, isolasi multi-tenant terenkripsi, dan akses langsung ke ekosistem AI Workforce.
           </p>
 
-          {/* Real-time Server Database Status Header Bar */}
-          <div className="mt-6 inline-flex flex-wrap items-center justify-center gap-2 p-2 rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
-            <div className="flex items-center space-x-2 px-3 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-[11px] font-medium text-emerald-300">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span>Server & Database Terhubung</span>
-            </div>
-
-            <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-xl bg-white/5 text-[11px] text-slate-300 font-mono">
-              <Server className="w-3 h-3 text-cyan-400" />
-              <span>api.orchestree.biz.id</span>
-            </div>
-
-            <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-xl bg-white/5 text-[11px] text-slate-300 font-mono">
-              <Database className="w-3 h-3 text-blue-400" />
-              <span>Cloud Database</span>
-            </div>
-
-            {/* Quick Action Sync Button */}
-            <button
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              title="Sinkronkan pembaruan harga terbaru dari Server Database"
-              className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 active:bg-white/30 text-white text-[11px] font-semibold transition-all cursor-pointer border border-white/10 disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin text-[#08B85C]' : 'text-slate-300'}`} />
-              <span>{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan'}</span>
-            </button>
-
-            {/* Integration Details Button */}
-            <button
-              onClick={() => setShowDiagnosticModal(true)}
-              title="Lihat status koneksi teknis dan uji pembaruan harga"
-              className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 text-[11px] font-medium transition-all cursor-pointer border border-cyan-500/20"
-            >
-              <Info className="w-3 h-3" />
-              <span className="hidden sm:inline">Info Integrasi</span>
-            </button>
+          {/* Simple & Safe Public Update Indicator */}
+          <div className="mt-5 inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-white/[0.04] border border-white/10 text-xs text-slate-300 shadow-sm">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+            <span>Tarif resmi diperbarui: <strong className="text-white font-medium">{lastUpdatedDate}</strong></span>
           </div>
-
-          {/* Real-time Notification Banner */}
-          {syncNotification && (
-            <div className="mt-4 max-w-xl mx-auto p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-center space-x-2 animate-fadeIn shadow-lg">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>{syncNotification}</span>
-            </div>
-          )}
 
           {/* Billing Cycle Toggle */}
           <div className="mt-8 inline-flex items-center p-1.5 rounded-2xl bg-white/5 border border-white/10">
@@ -429,92 +336,6 @@ export const PricingSection: React.FC<PricingSectionProps> = ({ onSelectPlan }) 
           </button>
         </div>
       </div>
-
-      {/* Database Diagnostic / Price Simulation Modal */}
-      {showDiagnosticModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-[#0B1835] border border-white/15 rounded-3xl max-w-xl w-full p-6 text-white shadow-2xl relative">
-            <button
-              onClick={() => setShowDiagnosticModal(false)}
-              className="absolute top-5 right-5 p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center space-x-3 mb-4">
-              <div className="p-2.5 rounded-xl bg-[#08B85C]/20 border border-[#08B85C]/30 text-[#08B85C]">
-                <Database className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-white">Status Integrasi Server Database</h3>
-                <p className="text-xs text-slate-400">Sinkronisasi data commercial plans dan subscription real-time</p>
-              </div>
-            </div>
-
-            {/* Connection Diagnostics */}
-            <div className="space-y-2.5 text-xs font-mono bg-black/40 p-4 rounded-2xl border border-white/10 mb-5">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Backend API URL:</span>
-                <span className="text-cyan-400 font-semibold">{syncMetadata?.backendUrl || 'https://api.orchestree.biz.id/api/v1'}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Database Project URL:</span>
-                <span className="text-blue-400 font-semibold">{syncMetadata?.supabaseUrl || 'https://db.orchestree.biz.id'}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Database Table:</span>
-                <span className="text-emerald-400 font-semibold">public.commercial_plans</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Realtime Channel:</span>
-                <span className="text-emerald-300 font-semibold flex items-center space-x-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                  <span>{isRealtimeActive ? 'SUBSCRIBED (Active)' : 'Reconnecting'}</span>
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Data Source Aktif:</span>
-                <span className="text-yellow-300 font-semibold uppercase">{syncMetadata?.source || 'backend_api / database'}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Update Terakhir:</span>
-                <span className="text-white">{syncMetadata?.lastSyncedAt ? new Date(syncMetadata.lastSyncedAt).toLocaleString('id-ID') : 'Baru saja'}</span>
-              </div>
-            </div>
-
-            {/* Realtime Sync Action */}
-            <div className="bg-white/5 p-4 rounded-2xl border border-white/10 space-y-3">
-              <div className="flex items-center space-x-2 text-xs font-semibold text-slate-200">
-                <RefreshCw className={`w-4 h-4 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>Sinkronisasi Data Realtime Database</span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Data harga, kuota kredit, seat limit, dan entitas paket diambil langsung dari Database Server dan Sinkronisasi Realtime.
-              </p>
-
-              <div className="flex items-center space-x-2 pt-2">
-                <button
-                  onClick={() => handleManualSync()}
-                  disabled={isSyncing}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-xs transition-all cursor-pointer flex items-center justify-center space-x-1.5"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>Sinkronkan Sekarang dari Server Database</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                onClick={() => setShowDiagnosticModal(false)}
-                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-white transition-all cursor-pointer"
-              >
-                Tutup
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 };

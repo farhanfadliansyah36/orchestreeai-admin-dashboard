@@ -23,6 +23,9 @@ export interface AdminAuthResponse {
   message?: string;
   expiresInSeconds?: number;
   csrfToken?: string;
+  status?: string;
+  email?: string;
+  sessionIdleTimeoutMinutes?: number;
 }
 
 export interface AdminLockoutResponse {

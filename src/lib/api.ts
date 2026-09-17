@@ -92,10 +92,20 @@ export class AdminAuthApiError extends Error {
   status?: number;
 
   constructor(
-    message: string,
+    message: any,
     data?: { isLocked?: boolean; remainingSeconds?: number; failedAttempts?: number; status?: number }
   ) {
-    super(message);
+    let cleanMessage = 'Terjadi kesalahan pada otentikasi Super Admin.';
+    if (typeof message === 'string' && message.trim() && message.trim() !== '{}' && message.trim() !== '[]' && message.trim() !== '[object Object]') {
+      cleanMessage = message.trim();
+    } else if (typeof message === 'object' && message !== null) {
+      if (typeof message.error === 'string' && message.error.trim() && message.error.trim() !== '{}') {
+        cleanMessage = message.error.trim();
+      } else if (typeof message.message === 'string' && message.message.trim() && message.message.trim() !== '{}') {
+        cleanMessage = message.message.trim();
+      }
+    }
+    super(cleanMessage);
     this.name = 'AdminAuthApiError';
     if (data) {
       this.isLocked = data.isLocked;
@@ -679,13 +689,19 @@ export class ApiClient {
       try {
         const parsed = JSON.parse(rawText);
         rawDetails = parsed;
-        if (parsed.error) parsedMessage = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
-        else if (parsed.message) parsedMessage = parsed.message;
-        else if (parsed.status === 'error') parsedMessage = JSON.stringify(parsed);
+        if (parsed.error && typeof parsed.error === 'string' && parsed.error.trim() && parsed.error.trim() !== '{}') {
+          parsedMessage = parsed.error.trim();
+        } else if (parsed.message && typeof parsed.message === 'string' && parsed.message.trim() && parsed.message.trim() !== '{}') {
+          parsedMessage = parsed.message.trim();
+        } else if (parsed.error && typeof parsed.error === 'object' && parsed.error?.message) {
+          parsedMessage = String(parsed.error.message);
+        } else if (parsed.status && typeof parsed.status === 'string' && parsed.status !== 'error') {
+          parsedMessage = `Status: ${parsed.status}`;
+        }
       } catch {}
 
-      const finalMessage = parsedMessage && parsedMessage.trim().length > 0
-        ? parsedMessage
+      const finalMessage = parsedMessage && parsedMessage.trim().length > 0 && parsedMessage.trim() !== '{}' && parsedMessage.trim() !== '[]' && parsedMessage.trim() !== '[object Object]'
+        ? parsedMessage.trim()
         : `Backend returned HTTP ${response.status} for ${endpoint}`;
 
       throw new BackendApiError(response.status, endpoint, finalMessage, rawDetails);
@@ -4277,9 +4293,29 @@ export class ApiClient {
     });
 
     if (res.status === 429) {
-      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      let data: any = {};
+      let rawText = '';
+      try {
+        if (typeof res.json === 'function') {
+          data = await res.json();
+        } else if (typeof res.text === 'function') {
+          rawText = await res.text();
+          if (rawText) data = JSON.parse(rawText);
+        }
+      } catch {
+        try {
+          if (typeof res.text === 'function') {
+            rawText = await res.text();
+            if (rawText) data = JSON.parse(rawText);
+          }
+        } catch {}
+      }
+
+      const errorMsg = (typeof data?.error === 'string' && data.error.trim() && data.error.trim() !== '{}')
+        ? data.error.trim()
+        : 'Akun terkunci selama 15 menit karena gagal login 3 kali.';
       throw new AdminAuthApiError(
-        data.error || 'Akun terkunci selama 15 menit karena gagal login 3 kali.',
+        errorMsg,
         {
           status: 429,
           isLocked: data.isLocked ?? true,
@@ -4290,9 +4326,35 @@ export class ApiClient {
     }
 
     if (!res.ok) {
-      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      let data: any = {};
+      let rawText = '';
+      try {
+        if (typeof res.json === 'function') {
+          data = await res.json();
+        } else if (typeof res.text === 'function') {
+          rawText = await res.text();
+          if (rawText) data = JSON.parse(rawText);
+        }
+      } catch {
+        try {
+          if (typeof res.text === 'function') {
+            rawText = await res.text();
+            if (rawText) data = JSON.parse(rawText);
+          }
+        } catch {}
+      }
+
+      let errorMsg = `Login gagal: [HTTP ${res.status}]`;
+      if (typeof data?.error === 'string' && data.error.trim() && data.error.trim() !== '{}') {
+        errorMsg = data.error.trim();
+      } else if (typeof data?.message === 'string' && data.message.trim() && data.message.trim() !== '{}') {
+        errorMsg = data.message.trim();
+      } else if (rawText && rawText.trim() && rawText.trim() !== '{}') {
+        errorMsg = rawText.trim();
+      }
+
       throw new AdminAuthApiError(
-        data.error || `Login gagal: [${res.status}]`,
+        errorMsg,
         {
           status: res.status,
           isLocked: data.isLocked,
@@ -4331,13 +4393,45 @@ export class ApiClient {
         // Catatan Audit Keamanan: Header X-Admin-Role hanya untuk server diagnostic logging, BUKAN otorisasi
         'X-Admin-Role': 'SUPER_ADMIN',
       },
-      body: JSON.stringify({ email, code, challengeToken }),
+      // Backend Ktor expects AdminVerifyMfaRequest with totpCode; provide both code and totpCode for full compatibility
+      body: JSON.stringify({
+        email,
+        code,
+        totpCode: code,
+        challengeToken: challengeToken || undefined,
+      }),
     });
 
     if (!res.ok) {
-      const data: AdminLockoutResponse = await res.json().catch(() => ({}));
+      let data: any = {};
+      let rawText = '';
+      try {
+        if (typeof res.json === 'function') {
+          data = await res.json();
+        } else if (typeof res.text === 'function') {
+          rawText = await res.text();
+          if (rawText) data = JSON.parse(rawText);
+        }
+      } catch {
+        try {
+          if (typeof res.text === 'function') {
+            rawText = await res.text();
+            if (rawText) data = JSON.parse(rawText);
+          }
+        } catch {}
+      }
+
+      let errorMsg = `Verifikasi MFA gagal: [HTTP ${res.status}]`;
+      if (typeof data?.error === 'string' && data.error.trim() && data.error.trim() !== '{}') {
+        errorMsg = data.error.trim();
+      } else if (typeof data?.message === 'string' && data.message.trim() && data.message.trim() !== '{}') {
+        errorMsg = data.message.trim();
+      } else if (rawText && rawText.trim() && rawText.trim() !== '{}') {
+        errorMsg = rawText.trim();
+      }
+
       throw new AdminAuthApiError(
-        data.error || 'Verifikasi MFA gagal.',
+        errorMsg,
         {
           status: res.status,
           isLocked: data.isLocked,
