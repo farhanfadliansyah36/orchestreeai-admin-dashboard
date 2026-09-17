@@ -6,6 +6,38 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/admin/auth/mfa/enroll')) {
+        const dynamicSecret = ('ORCHESTREEAISEC' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).substring(0, 32).toUpperCase();
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: 'ENROLLMENT_READY',
+            secret: dynamicSecret,
+            otpauthUri: `otpauth://totp/OrchestreeAI:${encodeURIComponent(superAdminEmail)}?secret=${dynamicSecret}&issuer=OrchestreeAI`,
+            message: 'MFA TOTP enrollment siap.',
+          }),
+        } as any;
+      }
+      if (urlStr.includes('/admin/auth/mfa/confirm-enrollment')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            token: 'test-jwt-token-superadmin',
+            user: { email: superAdminEmail, role: 'SUPER_ADMIN' },
+          }),
+        } as any;
+      }
+      return {
+        ok: false,
+        status: 404,
+        text: async () => 'Not found',
+      } as any;
+    });
   });
 
   it('1. Endpoint adminMfaEnroll returns otpauthUri, secret, and superAdmin email', async () => {
@@ -43,7 +75,7 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
     await expect(
       api.adminMfaConfirmEnrollment({
         code: '123', // invalid length
-        secret: 'JBSWY3DPEHPK3PXP',
+        secret: 'TESTSECRET123456',
         email: superAdminEmail,
       })
     ).rejects.toThrow('Kode TOTP harus terdiri dari 6 digit angka.');
@@ -77,5 +109,13 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
     expect(enrollSpy).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+
+  it('6. Endpoint adminMfaEnroll throws error on network/backend failure instead of returning hardcoded fallback', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network connection refused'));
+
+    await expect(
+      api.adminMfaEnroll({ email: superAdminEmail })
+    ).rejects.toThrow(/Gagal terhubung ke server autentikasi MFA/);
   });
 });

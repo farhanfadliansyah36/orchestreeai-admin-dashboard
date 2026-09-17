@@ -4487,29 +4487,37 @@ export class ApiClient {
 
     const targetEmail = emailStr || this.operatorId || 'orchestree.ai.id@gmail.com';
 
+    let res: Response;
     try {
-      const res = await fetch(enrollEndpoint, {
+      res = await fetch(enrollEndpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({ email: targetEmail }),
       });
-
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (networkErr) {
-      console.warn('Backend /admin/auth/mfa/enroll unreachable or returned error:', networkErr);
+    } catch (networkErr: any) {
+      throw new Error(
+        `Gagal terhubung ke server autentikasi MFA (/admin/auth/mfa/enroll): ${networkErr?.message || 'Jaringan tidak dapat diakses'}`
+      );
     }
 
-    // Resilient fallback otpauth URI for testing/offline support
-    const fallbackEmail = targetEmail;
-    const fallbackSecret = 'JBSWY3DPEHPK3PXP';
-    return {
-      status: 'ENROLLMENT_READY',
-      secret: fallbackSecret,
-      otpauthUri: `otpauth://totp/OrchestreeAI:${encodeURIComponent(fallbackEmail)}?secret=${fallbackSecret}&issuer=OrchestreeAI`,
-      message: 'MFA TOTP enrollment siap.',
-    };
+    if (!res.ok) {
+      let rawText = '';
+      try {
+        rawText = await res.text();
+      } catch {}
+      let errData: any = {};
+      try {
+        if (rawText) errData = JSON.parse(rawText);
+      } catch {}
+      const errMsg =
+        errData.message ||
+        errData.error ||
+        rawText ||
+        `Gagal menyiapkan pendaftaran MFA [HTTP ${res.status}]`;
+      throw new Error(errMsg);
+    }
+
+    return await res.json();
   }
 
   async adminMfaConfirmEnrollment(

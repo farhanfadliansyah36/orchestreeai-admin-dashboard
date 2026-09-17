@@ -239,12 +239,13 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
                   </span>
                   <div className="flex items-center justify-center space-x-2 bg-slate-900 border border-slate-700/70 rounded-lg p-2 font-mono text-xs text-emerald-400">
                     <span className="select-all tracking-wider font-bold">
-                      {enrollData?.secret || 'JBSWY3DPEHPK3PXP'}
+                      {enrollData?.secret || '-'}
                     </span>
                     <button
                       type="button"
                       onClick={handleCopySecret}
-                      className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition"
+                      disabled={!enrollData?.secret}
+                      className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
                       title="Salin Kunci"
                     >
                       {copiedSecret ? (
