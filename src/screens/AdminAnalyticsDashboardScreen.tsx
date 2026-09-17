@@ -29,7 +29,7 @@ import {
   Award,
 } from 'lucide-react';
 import { api } from '../lib/api';
-import { supabase } from '../lib/supabaseClient';
+import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import {
   AnalyticsOverview,
   TenantUsageCreditItem,
@@ -256,7 +256,7 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
       isInitialMountedRef.current = true;
       loadAllAnalytics();
     }
-  }, [loadAllAnalytics]);
+  }, []); // Run strictly once on mount with stable ref pattern
 
   // Handle individual period changes (REAL RE-FETCH)
   const handleRevenuePeriodChange = (period: AnalyticsPeriod) => {
@@ -284,6 +284,7 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
   // Mencegah loop refresh berulang dengan debouncing / throttling 5 detik
   // ---------------------------------------------------------------------------
   const realtimeDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerRealtimeUpdateRef = useRef<(tableName: string) => void>(() => {});
 
   useEffect(() => {
@@ -291,7 +292,11 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
       setRealtimeEventsCount((prev) => prev + 1);
       setRealtimePulse(true);
       setLastRealtimeTable(tableName);
-      setTimeout(() => setRealtimePulse(false), 2000);
+
+      if (pulseTimerRef.current) {
+        clearTimeout(pulseTimerRef.current);
+      }
+      pulseTimerRef.current = setTimeout(() => setRealtimePulse(false), 2000);
 
       // Debounce re-fetch agar tidak memicu badai network fetch jika event masuk bertubi-tubi
       if (realtimeDebounceTimerRef.current) {
@@ -302,11 +307,17 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
         fetchUsageCredit(creditPeriod);
         fetchLlmUsage(llmPeriod);
         fetchWorkflowExecutions();
-      }, 3000);
+      }, 5000);
     };
-  });
+  }, [creditPeriod, llmPeriod, fetchOverview, fetchUsageCredit, fetchLlmUsage, fetchWorkflowExecutions]);
 
   useEffect(() => {
+    // CRITICAL: Jangan aktifkan koneksi websocket jika Supabase belum terkonfigurasi
+    // Ini menghentikan reconnection storm, socket error cascade, dan fetch loop tak terkontrol
+    if (!isSupabaseConfigured) {
+      return;
+    }
+
     let ordersChannel: any;
     let paymentsChannel: any;
     let llmLogsChannel: any;
@@ -361,6 +372,9 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
     return () => {
       if (realtimeDebounceTimerRef.current) {
         clearTimeout(realtimeDebounceTimerRef.current);
+      }
+      if (pulseTimerRef.current) {
+        clearTimeout(pulseTimerRef.current);
       }
       try {
         if (ordersChannel) supabase.removeChannel(ordersChannel);
@@ -442,7 +456,7 @@ export const AdminAnalyticsDashboardScreen: React.FC = () => {
   };
 
   const providersList = useMemo(() => {
-    if (llmUsage && llmUsage.breakdown_by_provider.length > 0) {
+    if (llmUsage && Array.isArray(llmUsage.breakdown_by_provider) && llmUsage.breakdown_by_provider.length > 0) {
       return llmUsage.breakdown_by_provider.filter(
         (p) =>
           !p.provider?.toLowerCase().includes('openai') &&

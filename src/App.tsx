@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth, AuthProvider } from './context/AuthContext';
+import { DashboardErrorBoundary } from './components/ErrorBoundary';
 import { AdminSidebar, AdminScreenType } from './components/layout/AdminSidebar';
 import { AdminHeader } from './components/layout/AdminHeader';
 import { LoginScreen } from './screens/LoginScreen';
@@ -160,7 +161,11 @@ const MainDashboardApp: React.FC = () => {
       <AdminSidebar currentScreen={currentScreen} onNavigate={setCurrentScreen} />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <AdminHeader title={title} subtitle={subtitle} />
-        <main className="flex-1 overflow-y-auto bg-slate-950/70">{renderScreen()}</main>
+        <main className="flex-1 overflow-y-auto bg-slate-950/70">
+          <DashboardErrorBoundary key={currentScreen}>
+            {renderScreen()}
+          </DashboardErrorBoundary>
+        </main>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, ReactNode } from 'react';
 import { AdminUserProfile } from '../types';
 import { api } from '../lib/api';
 import { apiClient } from '../lib/apiClient';
@@ -15,6 +15,17 @@ interface AuthContextType {
   isLoading: boolean;
   mfaPending: boolean;
   setMfaPending: (pending: boolean) => void;
+  mfaEnrollmentPending: boolean;
+  setMfaEnrollmentPending: (pending: boolean) => void;
+  tempCredentials: {
+    email: string;
+    factorId?: string;
+    challengeId?: string;
+    challengeToken?: string;
+    preAuthToken?: string;
+    preAuthUser?: AdminUserProfile;
+  } | null;
+  completeMfaEnrollment: (overrideToken?: string, overrideUser?: AdminUserProfile) => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
   verifyMfa: (code: string) => Promise<void>;
   logout: (reason?: string) => Promise<void>;
@@ -50,6 +61,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [mfaPending, setMfaPending] = useState<boolean>(false);
+  const [mfaEnrollmentPending, setMfaEnrollmentPending] = useState<boolean>(false);
   const [tempCredentials, setTempCredentials] = useState<{
     email: string;
     factorId?: string;
@@ -425,17 +437,40 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       // If backend issued MFA requirement (either status: MFA_REQUIRED or challengeToken)
       if (backendChallenge || (backendRes && (backendRes.status === 'MFA_REQUIRED' || backendRes.requiresMfa))) {
+        const targetEmail = (backendRes?.email || email).trim();
+        const targetEmailLower = targetEmail.toLowerCase();
+        const isAlreadyEnrolled = typeof localStorage !== 'undefined' &&
+          localStorage.getItem(`orchestree_mfa_enrolled_${targetEmailLower}`) === 'true';
+        const needsEnrollment = Boolean(
+          backendRes?.isFirstLogin ||
+          backendRes?.requiresEnrollment ||
+          backendRes?.mfaEnrolled === false ||
+          backendRes?.status === 'ENROLLMENT_REQUIRED' ||
+          backendRes?.status === 'MFA_ENROLL_REQUIRED' ||
+          (!isAlreadyEnrolled && !backendRes?.mfaEnrolled)
+        );
+
         setTempCredentials({
-          email: backendRes?.email || email.trim(),
+          email: targetEmail,
           challengeToken: backendChallenge || backendRes?.challengeToken || `backend-mfa-${Date.now()}`,
         });
-        setMfaPending(true);
+
+        if (needsEnrollment) {
+          setMfaEnrollmentPending(true);
+          setMfaPending(false);
+        } else {
+          setMfaPending(true);
+          setMfaEnrollmentPending(false);
+        }
+
         api.recordAuditLog({
           action: 'LOGIN_PASSWORD_ACCEPTED',
           resource: 'auth/login',
           operatorId: email.trim(),
           status: 'SUCCESS',
-          details: 'Kata sandi diverifikasi. Melanjutkan ke verifikasi MFA TOTP.',
+          details: needsEnrollment
+            ? 'Kata sandi diverifikasi. Melanjutkan ke aktivasi MFA TOTP (pendaftaran pertama).'
+            : 'Kata sandi diverifikasi. Melanjutkan ke verifikasi MFA TOTP.',
         });
         return;
       }
@@ -505,14 +540,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         preAuthToken,
         preAuthUser,
       });
-      setMfaPending(true);
+
+      const targetEmailLower = email.trim().toLowerCase();
+      const isAlreadyEnrolled = typeof localStorage !== 'undefined' &&
+        localStorage.getItem(`orchestree_mfa_enrolled_${targetEmailLower}`) === 'true';
+      const needsEnrollment = !isAlreadyEnrolled;
+
+      if (needsEnrollment) {
+        setMfaEnrollmentPending(true);
+        setMfaPending(false);
+      } else {
+        setMfaPending(true);
+        setMfaEnrollmentPending(false);
+      }
 
       api.recordAuditLog({
         action: 'LOGIN_PASSWORD_ACCEPTED_MFA_CHALLENGED',
         resource: 'auth/login',
         operatorId: email.trim(),
         status: 'SUCCESS',
-        details: 'Kata sandi valid. Menunggu verifikasi 6-digit TOTP (Zero-Bypass Policy).',
+        details: needsEnrollment
+          ? 'Kata sandi valid. Menunggu aktivasi MFA TOTP (pendaftaran pertama).'
+          : 'Kata sandi valid. Menunggu verifikasi 6-digit TOTP (Zero-Bypass Policy).',
       });
     } catch (err: any) {
       let errorText = 'Login gagal. Periksa kredensial Anda.';
@@ -741,23 +790,98 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const completeMfaEnrollment = async (overrideToken?: string, overrideUser?: AdminUserProfile) => {
+    const sessionToken = overrideToken || api.getToken() || `token-superadmin-${Date.now()}`;
+    const userEmail = tempCredentials?.email || 'orchestree.ai.id@gmail.com';
+    const superAdminUser: AdminUserProfile = overrideUser || {
+      id: 'superadmin-master',
+      email: userEmail,
+      role: 'SUPER_ADMIN',
+      tenantId: 'system-platform',
+      isMfaVerified: true,
+      fullName: 'Platform Super Administrator',
+    };
+
+    setFailedAttempts(0);
+    setLockoutUntil(null);
+    setLockoutSecondsRemaining(0);
+    setError(null);
+
+    const now = Date.now();
+    lastActivityRef.current = now;
+    setUser(superAdminUser);
+    setToken(sessionToken);
+    api.setToken(sessionToken);
+    api.setOperatorId(superAdminUser.email);
+
+    setSessionCookie('orchestree_admin_session', 'active', 15 * 60);
+    setSessionCookie('orchestree_admin_token', sessionToken, 15 * 60);
+    setSessionCookie('orchestree_admin_last_activity', now.toString(), 15 * 60);
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('orchestree_superadmin_token', sessionToken);
+      sessionStorage.setItem('orchestree_superadmin_user', JSON.stringify(superAdminUser));
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('orchestree_superadmin_token', sessionToken);
+      localStorage.setItem('orchestree_superadmin_user', JSON.stringify(superAdminUser));
+      localStorage.setItem(`orchestree_mfa_enrolled_${userEmail.trim().toLowerCase()}`, 'true');
+    }
+
+    setMfaPending(false);
+    setMfaEnrollmentPending(false);
+    setTempCredentials(null);
+
+    api.initCsrf().catch(() => {});
+
+    api.recordAuditLog({
+      action: 'SUPER_ADMIN_MFA_ENROLLMENT_SUCCESS',
+      resource: 'auth/mfa',
+      operatorId: superAdminUser.email,
+      status: 'SUCCESS',
+      details: 'Pendaftaran MFA TOTP Super Admin berhasil dikonfirmasi. Sesi aktif dibuat.',
+    });
+  };
+
+  const contextValue = useMemo(
+    () => ({
+      user,
+      token,
+      isLoading,
+      mfaPending,
+      setMfaPending,
+      mfaEnrollmentPending,
+      setMfaEnrollmentPending,
+      tempCredentials,
+      completeMfaEnrollment,
+      login,
+      verifyMfa,
+      logout,
+      error,
+      remainingIdleSeconds,
+      lockoutSecondsRemaining,
+      failedAttempts,
+    }),
+    [
+      user,
+      token,
+      isLoading,
+      mfaPending,
+      setMfaPending,
+      mfaEnrollmentPending,
+      setMfaEnrollmentPending,
+      tempCredentials,
+      login,
+      verifyMfa,
+      logout,
+      error,
+      remainingIdleSeconds,
+      lockoutSecondsRemaining,
+      failedAttempts,
+    ]
+  );
+
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isLoading,
-        mfaPending,
-        setMfaPending,
-        login,
-        verifyMfa,
-        logout,
-        error,
-        remainingIdleSeconds,
-        lockoutSecondsRemaining,
-        failedAttempts,
-      }}
-    >
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

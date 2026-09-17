@@ -14,12 +14,17 @@ import {
   Plus,
   ToggleLeft,
   ToggleRight,
+  QrCode,
+  X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { AuditLogItem, PresenceSecurityAuditSummary } from '../types';
 import { HonestErrorBanner, HonestErrorInfo } from '../components/HonestErrorBanner';
+import { useAuth } from '../context/AuthContext';
+import { MfaEnrollmentView } from '../components/MfaEnrollmentView';
 
 export const SecurityAuditCenterScreen: React.FC = () => {
+  const { user } = useAuth();
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [presenceStats, setPresenceStats] = useState<PresenceSecurityAuditSummary | null>(null);
   const [allowlist, setAllowlist] = useState<string[]>([]);
@@ -31,6 +36,7 @@ export const SecurityAuditCenterScreen: React.FC = () => {
   const [search, setSearch] = useState<string>('');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [honestError, setHonestError] = useState<HonestErrorInfo | null>(null);
+  const [showReEnrollModal, setShowReEnrollModal] = useState<boolean>(false);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -224,6 +230,59 @@ export const SecurityAuditCenterScreen: React.FC = () => {
               <span className="text-slate-400 block text-[11px]">Percobaan Tidak Sah</span>
               <span className="text-lg font-bold text-amber-400">{presenceStats.potentialUnauthorizedAttempts}</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin MFA TOTP Management Card (Fase 124 Bagian A.1) */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="p-2.5 bg-emerald-950/60 border border-emerald-800/60 rounded-xl text-emerald-400 shrink-0">
+            <Fingerprint className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <span>Autentikasi Dua Faktor (MFA TOTP) Super Admin</span>
+              <span className="px-2 py-0.5 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-full text-[10px] font-mono uppercase font-semibold">
+                ENFORCED
+              </span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Akun aktif: <span className="text-slate-200 font-mono">{user?.email || 'orchestree.ai.id@gmail.com'}</span>. Pindai ulang QR Code dan perbarui secret authenticator jika mengganti perangkat atau aplikasi OTP.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowReEnrollModal(true)}
+          className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 text-xs font-semibold rounded-lg border border-slate-700 transition shrink-0"
+        >
+          <QrCode className="w-4 h-4" />
+          <span>Aktivasi Ulang / Re-Enroll MFA</span>
+        </button>
+      </div>
+
+      {/* Re-Enroll Modal */}
+      {showReEnrollModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-md">
+            <button
+              onClick={() => setShowReEnrollModal(false)}
+              className="absolute top-4 right-4 z-20 p-2 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 rounded-full transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <MfaEnrollmentView
+              email={user?.email || 'orchestree.ai.id@gmail.com'}
+              onSuccess={() => {
+                setShowReEnrollModal(false);
+                setMessage({
+                  type: 'success',
+                  text: 'Aktivasi ulang MFA TOTP berhasil dikonfirmasi. Authenticator Anda telah diperbarui.',
+                });
+                fetchData();
+              }}
+              onCancel={() => setShowReEnrollModal(false)}
+            />
           </div>
         </div>
       )}
