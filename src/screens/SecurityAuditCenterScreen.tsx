@@ -248,7 +248,7 @@ export const SecurityAuditCenterScreen: React.FC = () => {
               </span>
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Akun aktif: <span className="text-slate-200 font-mono">{user?.email || 'orchestree.ai.id@gmail.com'}</span>. Pindai ulang QR Code dan perbarui secret authenticator jika mengganti perangkat atau aplikasi OTP.
+              Akun aktif: <span className="text-slate-200 font-mono">{user?.email || 'Super Admin'}</span>. Pindai ulang QR Code dan perbarui secret authenticator jika mengganti perangkat atau aplikasi OTP.
             </p>
           </div>
         </div>

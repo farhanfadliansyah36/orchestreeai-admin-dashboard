@@ -19,7 +19,7 @@ import { AdminMfaEnrollResponse } from '../types';
 interface MfaEnrollmentViewProps {
   email: string;
   preAuthToken?: string;
-  onSuccess: (result: { token?: string; user?: any }) => void;
+  onSuccess: (result: { token?: string; user?: any; message?: string }) => void;
   onSwitchToTotpLogin?: () => void;
   onCancel?: () => void;
   isModal?: boolean;
@@ -117,8 +117,25 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
         secret || enrollData?.secret || enrollData?.secretKey
       );
 
-      if (confirmRes.success || confirmRes.token || confirmRes.accessToken) {
-        setSuccessMessage(confirmRes.message || 'MFA berhasil diaktifkan!');
+      const isSuccess = Boolean(
+        confirmRes.success ||
+        confirmRes.status === 'ACTIVE' ||
+        confirmRes.status === 'SUCCESS' ||
+        confirmRes.token ||
+        confirmRes.accessToken
+      );
+
+      if (isSuccess) {
+        const hasToken = Boolean(confirmRes.token || confirmRes.accessToken);
+        const successMsg = hasToken
+          ? (confirmRes.message || 'MFA berhasil diaktifkan! Mengarahkan ke dashboard...')
+          : 'MFA berhasil diaktifkan, silakan login kembali menggunakan kode dari Authenticator Anda.';
+
+        setSuccessMessage(successMsg);
+        setErrorMessage(null);
+        // Langkah 1.3: Bersihkan form/state (kode 6-digit dikosongkan agar tidak lagi terlihat di layar)
+        setTotpCode('');
+
         // Tandai di localStorage bahwa email ini sudah menyelesaikan enrollment
         try {
           localStorage.setItem(`orchestree_mfa_enrolled_${email.trim().toLowerCase()}`, 'true');
@@ -128,6 +145,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
           onSuccess({
             token: confirmRes.token || confirmRes.accessToken,
             user: confirmRes.user,
+            message: confirmRes.message,
           });
         }, 1200);
       } else {
@@ -172,7 +190,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
           <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
           <div>
             <p className="font-bold text-emerald-300 text-sm">Aktivasi MFA Berhasil</p>
-            <p className="text-slate-300 mt-0.5">{successMessage} Mengarahkan ke dashboard...</p>
+            <p className="text-slate-300 mt-0.5">{successMessage}</p>
           </div>
         </div>
       )}
@@ -310,7 +328,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting || totpCode.length !== 6 || Boolean(successMessage)}
-                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-2.5 rounded-xl text-sm transition shadow-lg shadow-emerald-950/60 disabled:opacity-50 flex items-center justify-center space-x-2"
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-2.5 rounded-xl text-sm transition shadow-lg shadow-emerald-950/60 disabled:opacity-50 flex items-center justify-center space-x-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
                   <>
@@ -319,7 +337,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
                   </>
                 ) : (
                   <>
-                    <span>Konfirmasi & Masuk Dashboard</span>
+                    <span>Konfirmasi Aktivasi MFA</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}

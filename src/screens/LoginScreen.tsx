@@ -21,13 +21,14 @@ export const LoginScreen: React.FC = () => {
   } = useAuth();
   const [email, setEmail] = useState<string>(() => {
     if (typeof localStorage !== 'undefined') {
-      return localStorage.getItem('orchestree_last_admin_email') || 'orchestree.ai.id@gmail.com';
+      return localStorage.getItem('orchestree_last_admin_email') || '';
     }
-    return 'orchestree.ai.id@gmail.com';
+    return '';
   });
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+  const [enrollmentSuccessNotice, setEnrollmentSuccessNotice] = useState<string | null>(null);
 
   const isLockedOut = lockoutSecondsRemaining > 0;
   const minutesLeft = Math.floor(lockoutSecondsRemaining / 60);
@@ -56,6 +57,7 @@ export const LoginScreen: React.FC = () => {
   const handleInitialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    setEnrollmentSuccessNotice(null);
     try {
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('orchestree_last_admin_email', email.trim());
@@ -69,6 +71,7 @@ export const LoginScreen: React.FC = () => {
   const handleMfaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    setEnrollmentSuccessNotice(null);
     try {
       await verifyMfa(totpCode);
     } catch (err: any) {
@@ -87,7 +90,20 @@ export const LoginScreen: React.FC = () => {
           <MfaEnrollmentView
             email={tempCredentials?.email || email || 'orchestree.ai.id@gmail.com'}
             preAuthToken={tempCredentials?.preAuthToken}
-            onSuccess={(result) => completeMfaEnrollment(result.token, result.user)}
+            onSuccess={(result) => {
+              if (result.token) {
+                completeMfaEnrollment(result.token, result.user);
+              } else {
+                setMfaEnrollmentPending(false);
+                setMfaPending(false);
+                setPassword('');
+                setTotpCode('');
+                setFormError(null);
+                setEnrollmentSuccessNotice(
+                  'MFA berhasil diaktifkan, silakan login kembali menggunakan kode dari Authenticator Anda.'
+                );
+              }
+            }}
             onSwitchToTotpLogin={() => {
               setMfaEnrollmentPending(false);
               setMfaPending(true);
@@ -141,6 +157,17 @@ export const LoginScreen: React.FC = () => {
             </div>
           )}
 
+          {/* MFA Enrollment Success notification */}
+          {enrollmentSuccessNotice && (
+            <div className="mb-6 p-4 bg-emerald-950/70 border border-emerald-600 rounded-xl flex items-start space-x-3 text-emerald-200 text-xs shadow-lg shadow-emerald-950/50 animate-fade-in">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-emerald-300 text-sm">Aktivasi MFA Berhasil</p>
+                <p className="text-slate-300 mt-0.5">{enrollmentSuccessNotice}</p>
+              </div>
+            </div>
+          )}
+
           {/* Attempt warning if not locked out */}
           {!isLockedOut && failedAttempts > 0 && (
             <div className="mb-4 p-2.5 bg-amber-950/40 border border-amber-800/60 rounded-xl flex items-center space-x-2 text-amber-300 text-xs">
@@ -170,13 +197,10 @@ export const LoginScreen: React.FC = () => {
                     disabled={isLockedOut}
                     onChange={(e) => setEmail(e.target.value)}
                     required
-                    placeholder="orchestree.ai.id@gmail.com"
+                    placeholder="admin@example.com"
                     className="w-full bg-slate-950 border border-slate-700/80 rounded-xl py-2.5 pl-10 pr-3.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-40"
                   />
                 </div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Email Super Admin: <span className="text-emerald-400 font-mono">orchestree.ai.id@gmail.com</span>
-                </p>
               </div>
 
               <div>

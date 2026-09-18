@@ -138,4 +138,55 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
     expect(result.secretKey).toBe(backendSecret);
     expect(result.secret).not.toBe('JBSWY3DPEHPK3PXP');
   });
+
+  it('8. Endpoint adminMfaConfirmEnrollment handles backend response with status ACTIVE and no token without error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ACTIVE',
+        email: superAdminEmail,
+        message: 'MFA TOTP berhasil diaktifkan. Gunakan kode dari authenticator app untuk login.',
+      }),
+    } as any);
+
+    const result = await api.adminMfaConfirmEnrollment({
+      code: '654321',
+      secret: 'GGXGAWSRECCVXC6ISGB3BFZHWIQQYG6F',
+      email: superAdminEmail,
+    });
+
+    expect(result).toBeDefined();
+    expect(result.status).toBe('ACTIVE');
+    expect(result.success).toBe(true);
+    expect(result.token).toBeUndefined();
+    expect(result.message).toContain('MFA TOTP berhasil diaktifkan');
+  });
+
+  it('9. Confirm enrollment sets orchestree_mfa_enrolled in localStorage', async () => {
+    const storage: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => storage[k] || null,
+      setItem: (k: string, v: string) => { storage[k] = v; },
+      removeItem: (k: string) => { delete storage[k]; },
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ACTIVE',
+        email: superAdminEmail,
+        message: 'MFA TOTP berhasil diaktifkan.',
+      }),
+    } as any);
+
+    await api.adminMfaConfirmEnrollment({
+      code: '112233',
+      secret: 'GGXGAWSRECCVXC6ISGB3BFZHWIQQYG6F',
+      email: superAdminEmail,
+    });
+
+    expect(storage[`orchestree_mfa_enrolled_${superAdminEmail}`]).toBe('true');
+  });
 });

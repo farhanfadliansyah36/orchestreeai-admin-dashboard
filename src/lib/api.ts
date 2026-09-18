@@ -4584,11 +4584,9 @@ export class ApiClient {
         body: JSON.stringify({
           code: cleanCode,
           totpCode: cleanCode,
-          token: cleanCode,
           email: targetEmail,
-          enrollmentToken,
-          secret,
-          secretKey: secret,
+          secretKey: secret || undefined,
+          enrollmentToken: enrollmentToken || undefined,
         }),
       });
     } catch (networkErr: any) {
@@ -4611,6 +4609,16 @@ export class ApiClient {
     }
 
     const data: AdminMfaConfirmEnrollmentResponse = await res.json();
+    const isSuccess = Boolean(
+      data.success ||
+      data.status === 'ACTIVE' ||
+      data.status === 'SUCCESS' ||
+      data.status === 'ENROLLED' ||
+      data.token ||
+      data.accessToken
+    );
+    data.success = isSuccess;
+
     const effectiveToken = data.accessToken || data.token;
     if (effectiveToken) {
       this.setToken(effectiveToken);
@@ -4623,6 +4631,9 @@ export class ApiClient {
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('orchestree_superadmin_token', effectiveToken);
       }
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(`orchestree_mfa_enrolled_${targetEmail.trim().toLowerCase()}`, 'true');
     }
     return data;
   }
