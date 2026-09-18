@@ -4517,7 +4517,18 @@ export class ApiClient {
       throw new Error(errMsg);
     }
 
-    return await res.json();
+    const rawData = await res.json();
+    const resolvedSecret =
+      rawData.secret ||
+      rawData.secretKey ||
+      (rawData.otpauthUri ? new URL(rawData.otpauthUri).searchParams.get('secret') || undefined : undefined);
+
+    return {
+      ...rawData,
+      secret: resolvedSecret,
+      secretKey: resolvedSecret,
+      otpauthUri: rawData.otpauthUri,
+    };
   }
 
   async adminMfaConfirmEnrollment(
@@ -4565,8 +4576,9 @@ export class ApiClient {
 
     const targetEmail = email || this.operatorId || 'orchestree.ai.id@gmail.com';
 
+    let res: Response;
     try {
-      const res = await fetch(confirmEndpoint, {
+      res = await fetch(confirmEndpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -4576,88 +4588,43 @@ export class ApiClient {
           email: targetEmail,
           enrollmentToken,
           secret,
+          secretKey: secret,
         }),
       });
-
-      if (!res.ok) {
-        let rawText = '';
-        try {
-          rawText = await res.text();
-        } catch {}
-        let errData: any = {};
-        try {
-          if (rawText) errData = JSON.parse(rawText);
-        } catch {}
-        const errMsg = errData.message || errData.error || rawText || `Konfirmasi MFA gagal [HTTP ${res.status}]`;
-
-        // If backend returned gateway origin/signature rejection or 404 while backend endpoints are still in flight,
-        // use the graceful resilient fallback for dev and UI testing
-        const isGatewayOrRouteUnmounted =
-          res.status === 404 ||
-          res.status === 502 ||
-          res.status === 503 ||
-          (res.status === 403 && errMsg.toLowerCase().includes('signature'));
-
-        if (!isGatewayOrRouteUnmounted) {
-          throw new Error(errMsg);
-        }
-        console.warn(`Backend /admin/auth/mfa/confirm-enrollment [HTTP ${res.status}]: ${errMsg}. Using resilient fallback.`);
-        const fallbackToken = `mock-token-${Date.now()}`;
-        this.setToken(fallbackToken);
-        return {
-          success: true,
-          status: 'ENROLLED',
-          message: 'MFA berhasil diaktifkan.',
-          token: fallbackToken,
-          user: {
-            id: 'superadmin-master',
-            email: targetEmail,
-            role: 'SUPER_ADMIN',
-            tenantId: 'system-platform',
-            isMfaVerified: true,
-            fullName: 'Platform Super Administrator',
-          },
-        };
-      } else {
-        const data: AdminMfaConfirmEnrollmentResponse = await res.json();
-        const effectiveToken = data.accessToken || data.token;
-        if (effectiveToken) {
-          this.setToken(effectiveToken);
-          if (typeof document !== 'undefined') {
-            document.cookie = `orchestree_admin_token=${encodeURIComponent(effectiveToken)}; path=/; max-age=900; SameSite=Strict`;
-          }
-          if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem('orchestree_superadmin_token', effectiveToken);
-          }
-          if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('orchestree_superadmin_token', effectiveToken);
-          }
-        }
-        return data;
-      }
-    } catch (err: any) {
-      // If error was thrown from HTTP non-ok response or validation, rethrow it
-      if (err?.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError')) {
-        throw err;
-      }
-      // Resilient fallback for test environments when backend endpoint is not yet mounted
-      const mockToken = `mock-token-${Date.now()}`;
-      this.setToken(mockToken);
-      return {
-        success: true,
-        status: 'ENROLLED',
-        message: 'MFA berhasil diaktifkan.',
-        token: mockToken,
-        user: {
-          id: 'superadmin-master',
-          email: targetEmail,
-          role: 'SUPER_ADMIN',
-          tenantId: 'system-platform',
-          isMfaVerified: true,
-          fullName: 'Platform Super Administrator',
-        },
-      };
+    } catch (networkErr: any) {
+      throw new Error(
+        `Gagal terhubung ke server autentikasi MFA (/admin/auth/mfa/confirm-enrollment): ${networkErr?.message || 'Jaringan tidak dapat diakses'}`
+      );
     }
+
+    if (!res.ok) {
+      let rawText = '';
+      try {
+        rawText = await res.text();
+      } catch {}
+      let errData: any = {};
+      try {
+        if (rawText) errData = JSON.parse(rawText);
+      } catch {}
+      const errMsg = errData.message || errData.error || rawText || `Konfirmasi MFA gagal [HTTP ${res.status}]`;
+      throw new Error(errMsg);
+    }
+
+    const data: AdminMfaConfirmEnrollmentResponse = await res.json();
+    const effectiveToken = data.accessToken || data.token;
+    if (effectiveToken) {
+      this.setToken(effectiveToken);
+      if (typeof document !== 'undefined') {
+        document.cookie = `orchestree_admin_token=${encodeURIComponent(effectiveToken)}; path=/; max-age=900; SameSite=Strict`;
+      }
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem('orchestree_superadmin_token', effectiveToken);
+      }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('orchestree_superadmin_token', effectiveToken);
+      }
+    }
+    return data;
   }
 
   // ===========================================================================

@@ -118,4 +118,24 @@ describe('Bagian A: Super Admin MFA Enrollment & Verification Flow', () => {
       api.adminMfaEnroll({ email: superAdminEmail })
     ).rejects.toThrow(/Gagal terhubung ke server autentikasi MFA/);
   });
+
+  it('7. Endpoint adminMfaEnroll correctly resolves secretKey returned by backend', async () => {
+    const backendSecret = 'GGXGAWSRECCVXC6ISGB3BFZHWIQQYG6F';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ENROLLMENT_PENDING',
+        email: superAdminEmail,
+        secretKey: backendSecret,
+        otpauthUri: `otpauth://totp/OrchestreeAI:${encodeURIComponent(superAdminEmail)}?secret=${backendSecret}&issuer=OrchestreeAI`,
+        message: 'Enrollment initiated.',
+      }),
+    } as any);
+
+    const result = await api.adminMfaEnroll({ email: superAdminEmail });
+    expect(result.secret).toBe(backendSecret);
+    expect(result.secretKey).toBe(backendSecret);
+    expect(result.secret).not.toBe('JBSWY3DPEHPK3PXP');
+  });
 });

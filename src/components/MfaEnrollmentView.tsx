@@ -34,6 +34,8 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
   isModal = false,
 }) => {
   const [enrollData, setEnrollData] = useState<AdminMfaEnrollResponse | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [otpauthUri, setOtpauthUri] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState<string>('');
   const [isLoadingEnroll, setIsLoadingEnroll] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -54,8 +56,21 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
   const fetchEnrollment = useCallback(async (isManualRefresh: boolean = false) => {
     setIsLoadingEnroll(true);
     setErrorMessage(null);
+    setSecret(null);
+    setOtpauthUri(null);
     try {
       const data = await api.adminMfaEnroll(emailRef.current, preAuthTokenRef.current);
+      const resolvedSecret =
+        data.secret ||
+        data.secretKey ||
+        (data.otpauthUri ? new URL(data.otpauthUri).searchParams.get('secret') : null);
+
+      if (!resolvedSecret || !data.otpauthUri) {
+        throw new Error('Response API enroll tidak memuat secret key atau URI OTP yang valid.');
+      }
+
+      setSecret(resolvedSecret);
+      setOtpauthUri(data.otpauthUri);
       setEnrollData(data);
     } catch (err: any) {
       setErrorMessage(
@@ -75,8 +90,8 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCopySecret = () => {
-    if (enrollData?.secret) {
-      navigator.clipboard.writeText(enrollData.secret);
+    if (secret) {
+      navigator.clipboard.writeText(secret);
       setCopiedSecret(true);
       setTimeout(() => setCopiedSecret(false), 2000);
     }
@@ -99,7 +114,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
         email,
         enrollData?.enrollmentToken,
         preAuthToken,
-        enrollData?.secret
+        secret || enrollData?.secret || enrollData?.secretKey
       );
 
       if (confirmRes.success || confirmRes.token || confirmRes.accessToken) {
@@ -201,11 +216,11 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
               </button>
             </div>
 
-            {enrollData?.otpauthUri ? (
+            {otpauthUri ? (
               <div className="flex flex-col items-center">
                 <div className="bg-white p-3.5 rounded-2xl shadow-xl shadow-black/40 border-4 border-emerald-950/40 inline-block">
                   <QRCodeSVG
-                    value={enrollData.otpauthUri}
+                    value={otpauthUri}
                     size={176}
                     level="M"
                     includeMargin={false}
@@ -217,7 +232,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
               </div>
             ) : (
               <div className="p-4 text-xs text-amber-300">
-                URI Otentikasi tidak tersedia. Coba refresh kembali.
+                URI Otentikasi tidak tersedia dari response server. Silakan refresh kembali.
               </div>
             )}
 
@@ -227,7 +242,7 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowManualKey(true)}
-                  className="text-[11px] text-slate-400 hover:text-emerald-400 underline transition inline-flex items-center space-x-1"
+                  className="text-[11px] text-slate-400 hover:text-emerald-400 underline transition inline-flex items-center space-x-1 cursor-pointer"
                 >
                   <HelpCircle className="w-3 h-3" />
                   <span>Tidak bisa scan kamera? Masukkan kunci manual</span>
@@ -237,24 +252,29 @@ export const MfaEnrollmentView: React.FC<MfaEnrollmentViewProps> = ({
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
                     Kunci Rahasia Manual (Base32):
                   </span>
-                  <div className="flex items-center justify-center space-x-2 bg-slate-900 border border-slate-700/70 rounded-lg p-2 font-mono text-xs text-emerald-400">
-                    <span className="select-all tracking-wider font-bold">
-                      {enrollData?.secret || '-'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopySecret}
-                      disabled={!enrollData?.secret}
-                      className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Salin Kunci"
-                    >
-                      {copiedSecret ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </div>
+                  {secret ? (
+                    <div className="flex items-center justify-center space-x-2 bg-slate-900 border border-slate-700/70 rounded-lg p-2 font-mono text-xs text-emerald-400">
+                      <span className="select-all tracking-wider font-bold">
+                        {secret}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopySecret}
+                        className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition cursor-pointer"
+                        title="Salin Kunci"
+                      >
+                        {copiedSecret ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2 text-xs text-rose-400 bg-rose-950/30 rounded border border-rose-900/50 text-center">
+                      Kunci rahasia belum dimuat dari server.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

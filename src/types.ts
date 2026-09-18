@@ -33,6 +33,7 @@ export interface AdminAuthResponse {
 export interface AdminMfaEnrollResponse {
   status?: string;
   secret?: string;
+  secretKey?: string;
   otpauthUri: string;
   qrCodeUrl?: string;
   enrollmentToken?: string;
